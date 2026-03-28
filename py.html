@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Vexa Admin | الإدارة الشاملة</title>
+    <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;700;900&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
+    <style>
+        :root { 
+            --primary: #0ea5e9; --bg: #020617; --card: rgba(30, 41, 59, 0.7); 
+            --success: #10b981; --danger: #ef4444; --warning: #f59e0b; --agent: #a855f7; 
+        }
+        body { font-family: 'Cairo', sans-serif; background: var(--bg); color: white; padding: 20px; margin: 0; }
+        .container { max-width: 1100px; margin: 0 auto; }
+        
+        .header { background: var(--card); padding: 20px; border-radius: 20px; text-align: center; margin-bottom: 25px; border: 1px solid rgba(255,255,255,0.1); }
+        
+        /* كارت الطلب */
+        .request-card { 
+            background: var(--card); border-radius: 18px; padding: 15px; margin-bottom: 12px; 
+            display: flex; flex-direction: column; gap: 15px; border-right: 5px solid transparent;
+            transition: 0.3s; animation: slideIn 0.3s ease;
+        }
+        @media(min-width: 768px) { .request-card { flex-direction: row; justify-content: space-between; align-items: center; } }
+        
+        /* تمييز الأنواع بالألوان */
+        .type-deposit { border-right-color: var(--success); }
+        .type-withdraw { border-right-color: var(--danger); }
+        .type-agent { border-right-color: var(--agent); }
+
+        .info-box b { font-size: 18px; display: block; }
+        .info-box span { font-size: 13px; color: #94a3b8; }
+        
+        .badge { padding: 4px 10px; border-radius: 8px; font-size: 12px; font-weight: bold; margin-left: 5px; }
+        .badge-deposit { background: rgba(16, 185, 129, 0.2); color: var(--success); }
+        .badge-withdraw { background: rgba(239, 68, 68, 0.2); color: var(--danger); }
+        .badge-agent { background: rgba(168, 85, 247, 0.2); color: var(--agent); }
+
+        .actions { display: flex; gap: 8px; flex-wrap: wrap; }
+        .btn { padding: 10px 16px; border-radius: 10px; border: none; cursor: pointer; font-weight: 700; font-family: 'Cairo'; transition: 0.2s; font-size: 14px; }
+        .btn-confirm { background: var(--success); color: white; }
+        .btn-reject { background: rgba(239, 68, 68, 0.1); color: var(--danger); border: 1px solid var(--danger); }
+        .btn-cpa { background: var(--warning); color: white; }
+
+        @keyframes slideIn { from { opacity: 0; transform: translateX(20px); } to { opacity: 1; transform: translateX(0); } }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <div class="header">
+        <h1>لوحة تحكم VEXA الشاملة 🚀</h1>
+        <p>إدارة (إيداعات - سحوبات لاعبين - عمولات وكلاء)</p>
+    </div>
+
+    <div id="master-list">
+        <div style="text-align: center; padding: 50px;"><i class="fas fa-spinner fa-spin fa-3x"></i></div>
+    </div>
+</div>
+
+<script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/9.17.1/firebase-app.js";
+    import { getFirestore, collection, query, where, onSnapshot, doc, updateDoc, runTransaction, increment, getDocs, getDoc } from "https://www.gstatic.com/firebasejs/9.17.1/firebase-firestore.js";
+
+    const firebaseConfig = {
+        apiKey: "AIzaSyAzcP_T8x5ouwwKkhadtBTdsUxk3XqwJec",
+        authDomain: "vexa-4b2fb.firebaseapp.com",
+        projectId: "vexa-4b2fb",
+        appId: "1:977620445308:web:fec22230e1fbb30c8881f9"
+    };
+
+    const app = initializeApp(firebaseConfig);
+    const db = getFirestore(app);
+
+    // دالة واحدة لمراقبة كل شيء
+    function initAdminSystem() {
+        const q = query(collection(db, "transactions"), where("status", "==", "pending"));
+        const qAgent = query(collection(db, "withdrawRequests"), where("status", "==", "pending"));
+
+        // 1. مراقبة الإيداعات والسحوبات (Transactions)
+        onSnapshot(q, (snap) => renderAll());
+        // 2. مراقبة سحوبات الوكلاء (WithdrawRequests)
+        onSnapshot(qAgent, (snap) => renderAll());
+    }
+
+    async function renderAll() {
+        const list = document.getElementById('master-list');
+        const transSnap = await getDocs(query(collection(db, "transactions"), where("status", "==", "pending")));
+        const agentSnap = await getDocs(query(collection(db, "withdrawRequests"), where("status", "==", "pending")));
+        
+        list.innerHTML = '';
+
+        if(transSnap.empty && agentSnap.empty) {
+            list.innerHTML = '<div style="text-align:center; color:#94a3b8;">لا توجد طلبات معلقة حالياً ✅</div>';
+            return;
+        }
+
+        // معالجة معاملات اللاعبين (إيداع/سحب)
+        for (const d of transSnap.docs) {
+            const data = d.data();
+            const id = d.id;
+            const isDeposit = data.type === 'deposit';
+            
+            // جلب كود البرومو للاعب
+            const userSnap = await getDoc(doc(db, "users", data.uid));
+            const userData = userSnap.exists() ? userSnap.data() : {};
+            const promo = userData.referredBy || 'بدون';
+
+            list.innerHTML += `
+                <div class="request-card ${isDeposit ? 'type-deposit' : 'type-withdraw'}">
+                    <div class="info-box">
+                        <span class="badge ${isDeposit ? 'badge-deposit' : 'badge-withdraw'}">
+                            ${isDeposit ? 'إيداع لاعب' : 'سحب لاعب'}
+                        </span>
+                        <b>${data.amount} ج.م</b>
+                        <span>رقم الكاش: ${data.sender_phone || data.receiver_phone || '---'}</span>
+                        <span>البرومو: ${promo}</span>
+                    </div>
+                    <div class="actions">
+                        ${isDeposit ? `
+                            <button class="btn btn-confirm" onclick="confirmDeposit('${id}', '${data.uid}', ${data.amount}, 'percent', '${promo}')">تأكيد (40%)</button>
+                            <button class="btn btn-cpa" onclick="confirmDeposit('${id}', '${data.uid}', ${data.amount}, 'cpa', '${promo}')">CPA 50</button>
+                        ` : `
+                            <button class="btn btn-confirm" onclick="confirmWithdraw('${id}', 'transactions')">تم التحويل</button>
+                        `}
+                        <button class="btn btn-reject" onclick="rejectOrder('${id}', 'transactions')">رفض</button>
+                    </div>
+                </div>
+            `;
+        }
+
+        // معالجة سحوبات الوكلاء
+        agentSnap.forEach(d => {
+            const data = d.data();
+            list.innerHTML += `
+                <div class="request-card type-agent">
+                    <div class="info-box">
+                        <span class="badge badge-agent">سحب عمولة وكيل</span>
+                        <b>${data.amount} ج.م</b>
+                        <span>الوكيل: ${data.username}</span>
+                        <span>رقم الكاش: ${data.method}</span>
+                    </div>
+                    <div class="actions">
+                        <button class="btn btn-confirm" onclick="confirmWithdraw('${d.id}', 'withdrawRequests')">تم التحويل للوكيل</button>
+                        <button class="btn btn-reject" onclick="rejectOrder('${d.id}', 'withdrawRequests', '${data.uid}', ${data.amount})">رفض</button>
+                    </div>
+                </div>
+            `;
+        });
+    }
+
+    // --- الوظائف التنفيذية ---
+
+    // 1. تأكيد إيداع وتوزيع عمولات
+    window.confirmDeposit = async (id, uid, amount, mode, promo) => {
+        const confirm = await Swal.fire({ title: 'تأكيد الإيداع؟', icon: 'question', showCancelButton: true });
+        if(!confirm.isConfirmed) return;
+
+        try {
+            await runTransaction(db, async (transaction) => {
+                const userRef = doc(db, "users", uid);
+                const reqRef = doc(db, "transactions", id);
+                
+                // شحن محفظة اللاعب
+                transaction.update(userRef, { walletBalance: increment(amount) });
+                
+                // توزيع عمولة الوكيل
+                if (promo !== 'بدون' && promo !== 'OFFICIAL') {
+                    const agentQ = query(collection(db, "users"), where("myPromoCode", "==", promo));
+                    const agentDocs = await getDocs(agentQ);
+                    if (!agentDocs.empty) {
+                        const agentRef = doc(db, "users", agentDocs.docs[0].id);
+                        const commission = mode === 'percent' ? amount * 0.40 : 50;
+                        transaction.update(agentRef, { 
+                            agentEarnings: increment(commission),
+                            totalEarned: increment(commission) 
+                        });
+                    }
+                }
+                transaction.update(reqRef, { status: 'completed' });
+            });
+            Swal.fire('تم بنجاح', 'تم الشحن وتوزيع العمولة', 'success');
+        } catch (e) { Swal.fire('خطأ', e.message, 'error'); }
+    };
+
+    // 2. تأكيد سحب (لاعب أو وكيل)
+    window.confirmWithdraw = async (id, collectionName) => {
+        const confirm = await Swal.fire({ title: 'هل تم التحويل فعلاً؟', icon: 'warning', showCancelButton: true });
+        if(!confirm.isConfirmed) return;
+
+        await updateDoc(doc(db, collectionName, id), { status: 'completed' });
+        Swal.fire('تم التأكيد', 'تم تحديث حالة الطلب لمكتمل', 'success');
+    };
+
+    // 3. رفض طلب (إيداع أو سحب)
+    window.rejectOrder = async (id, colName, uid = null, amount = 0) => {
+        const confirm = await Swal.fire({ title: 'رفض الطلب؟', icon: 'error', showCancelButton: true });
+        if(!confirm.isConfirmed) return;
+
+        // إذا كان رفض سحب وكيل، نرجع له الفلوس في حسابه
+        if(colName === 'withdrawRequests' && uid) {
+            await updateDoc(doc(db, "users", uid), { agentEarnings: increment(amount) });
+        }
+
+        await updateDoc(doc(db, colName, id), { status: 'rejected' });
+        Swal.fire('تم الرفض', '', 'info');
+    };
+
+    initAdminSystem();
+</script>
+</body>
+</html>
